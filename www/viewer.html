@@ -10,11 +10,13 @@
     <script src="https://code.jquery.com/jquery-3.3.1.min.js"></script>
     <link rel="stylesheet" href="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/style.min.css" type="text/css">
     <script src="https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/viewer3D.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stats.js/r17/Stats.min.js"></script>
     <style>
         body {
             margin: 0;
             padding: 0;
             display: flex;
+            overflow: hidden;
         }
         #folderStructure {
             width: 300px;
@@ -38,8 +40,9 @@
             border-color: #aaa;
         }
         #MyViewerDiv {
-            flex-grow: 1;
             height: 100vh;
+            width: 100%;
+            position: relative;
         }
 
         .active-folder {
@@ -48,7 +51,7 @@
     </style>
 </head>
 <body>
-    <div style="display: flex;">
+    <div style="display: flex; width: 100vw;">
         <div id="folderStructure">
             <h3>Folders</h3>
             <!-- Folders will be listed here -->
@@ -62,6 +65,33 @@
     </div>
 
     <script>
+        // Variables for FPS calculation
+        var lastFrameTime = Date.now();
+        var fpsSum = 0;
+        var fpsCount = 0;
+
+        function calculateFPS() {
+            var now = Date.now();
+            var deltaTime = now - lastFrameTime;
+            lastFrameTime = now;
+
+            if (deltaTime > 0) {
+                var fps = 1000 / deltaTime;
+                fpsSum += fps;
+                fpsCount++;
+            }
+        }
+
+        // Log average FPS every 5 seconds
+        setInterval(function() {
+            if (fpsCount > 0) {
+                var averageFps = fpsSum / fpsCount;
+                console.log("Average FPS over the last 5 seconds:", averageFps.toFixed(2));
+                fpsSum = 0;
+                fpsCount = 0;
+            }
+        }, 5000);
+
         var viewer;
         var options = {
             env: 'AutodeskProduction',
@@ -73,13 +103,27 @@
         var modelName = getUrlParameter('model');
         var modelUrl = `http://localhost:3031/svfs/${folderName}/${modelName}`;
 
+        console.log('modelUrl', modelUrl);
+
         Autodesk.Viewing.Initializer(options, function onInitialized() {
             var htmlElement = document.getElementById('MyViewerDiv');
             if (htmlElement) {
                 viewer = new Autodesk.Viewing.GuiViewer3D(htmlElement);
                 viewer.start();
+
+                // Attach FPS calculation to the RENDER_PRESENTED_EVENT
+                viewer.addEventListener(Autodesk.Viewing.RENDER_PRESENTED_EVENT, function() {
+                    calculateFPS();
+                });
+
                 viewer.loadModel(modelUrl, {}, function(model) {
-                    console.log('Model loaded:', model);
+                    
+                    var instanceTree = model.getData().instanceTree;
+                    var rootId = instanceTree.getRootId();
+
+                    instanceTree.enumNodeProperties(rootId, function (dbid, props) {
+                        console.log('Properties for node ' + dbid + ': ', props);
+                    });
                 }, function(error) {
                     console.error('Error loading model:', error);
                 });
@@ -148,10 +192,32 @@
                             viewer = new Autodesk.Viewing.GuiViewer3D(document.getElementById('MyViewerDiv'));
                             viewer.start();
                         }
+
+                        console.log('modelUrl1,', modelUrl);
+
+                        // Start timing
+                        var startTime = new Date();
+
                         viewer.loadModel(modelUrl, {}, function(model) {
-                            console.log('Model loaded:', model);
+                            // Listen for the event that indicates the scene is fully loaded
+                            viewer.addEventListener(Autodesk.Viewing.GEOMETRY_LOADED_EVENT, function() {
+                                // End timing
+                                var endTime = new Date();
+                                var timeTaken = (endTime - startTime) / 1000; // time in seconds
+
+                                console.log('Scene fully loaded');
+                                console.log('Total loading time: ' + timeTaken.toFixed(2) + ' seconds');
+
+                                // Hide the disclaimer once a scene is loaded
+                                jQuery('#viewerDisclaimer').hide();
+                            });
+
                             // Hide the disclaimer once a scene is loaded
                             jQuery('#viewerDisclaimer').hide();
+
+
+                            // Add a selection event listener
+                            viewer.addEventListener(Autodesk.Viewing.SELECTION_CHANGED_EVENT, onModelSelected);
                         }, function(error) {
                             console.error('Error loading model:', error);
                         });
@@ -160,8 +226,47 @@
             });
         }
 
+        // EVENT SELECTION CHANGE
+        function onModelSelected(event) {
+
+            // get object id
+            let dbId = event.dbIdArray[0];
+            // get object id
+            console.log("Object Id: ", dbId);
+
+            console.log('viewer.mode', viewer.model)
+
+            const tree = viewer.model.getInstanceTree();
+            const frags = viewer.model.getFragmentList();
+            tree.enumNodeFragments(dbId, function(fragid) {
+                let bounds = new THREE.Box3();
+                frags.getWorldBounds(fragid, bounds);
+                console.log("Bounding Box",bounds);
+                let center = calcCenter(bounds);
+                console.log("Center",center);
+            }, true);
+            // get properties by object id
+            getProperty(this.model, dbId);
+        }
+
+        function calcCenter(bbox) {
+            return new THREE.Vector3(
+                (bbox.max.x + bbox.min.x) / 2,
+                (bbox.max.y + bbox.min.y) / 2,
+                (bbox.max.z + bbox.min.z) / 2
+            );
+        }
+
+        function getProperty(model, dbId) {
+            model.getProperties(dbId, function (data) {
+                console.log(data);
+            });
+        }
+
 
         loadFolderStructure();
+
+        
     </script>
 </body>
 </html>
